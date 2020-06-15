@@ -36,29 +36,32 @@ class Box {
     this.$scribble.appendChild(this.$scribblePolyline);
   }
   
-  onLineClick({ player }) {
+  onLineClick({ player }) {    
     if( this.lineLeft.player 
      && this.lineTop.player
      && this.lineRight.player
      && this.lineBottom.player ) {
       this.player = player;
-      this.player.score++;
       
       this.$scribblePolyline.style.strokeWidth = 75 + Math.random() * 50;
-      this.$scribblePolyline.style.stroke = this.player.color;
+      this.$scribblePolyline.style.stroke = this.game.players[player].color;
       this.$scribble.classList.add('visible');
+      
+      return true;
     }
     
+    return false;    
   }
   
 }
 
 class Line {
   
-  constructor(game, { x, y }) {
+  constructor(game, { x, y, onClick }) {
     this.game = game;
     this.x = x;
     this.y = y;
+    this.onClick = onClick;
     
     this.player = null;
     this.listeners = [];
@@ -113,17 +116,27 @@ class Line {
     this.listeners.push(fn);
   }
   
+  setPlayer(playerId) {
+    if( this.player ) return;
+    this.player = playerId;
+    const boxWasClosed = this.listeners.some(listener => listener({
+      player: playerId,
+    }));
+        
+    this.$line.classList.add('taken');
+    this.$line.style.stroke = this.game.players[this.player].color;
+    //this.$line.style.stroke = 'white';
+    
+    this.game.nextTurn({
+      nextPlayer: !boxWasClosed,
+    });
+    
+  }
+  
   onClick() {
     if( this.player ) return;
-    this.player = this.game.players[this.game.player];
-    this.listeners.forEach(listener => listener({
-      player: this.player,
-    }));
-    
-    this.$line.classList.add('taken');
-    this.$line.style.stroke = this.player.color;
-    this.$line.style.stroke = 'white';
-    this.game.nextTurn();
+    this.setPlayer(this.game.player);
+    this.onClick();
   }
   
 }
@@ -136,46 +149,25 @@ class LineVertical extends Line {
   
 }
 
-class Player {
-  
-  constructor({ name, color }) {
-    this.name = name;
-    this.color = color;
-    
-    this.score = 0;
-  }
-  
-}
-
 class Game {
   
   constructor($el, {
-    width = 3,
-    height = 3,
-    players = [
-      new Player({
-        name: 'Player One',
-        color: '#CCCC00',
-      }),
-      new Player({
-        name: 'Player Two',
-        color: '#00CCCC',
-      }),
-      new Player({
-        name: 'Player Three',
-        color: '#CC00CC',
-      }),
-    ],
-  } = {}) {
+    width = 2,
+    height = 2,
+    players = [],
+    onTurn,
+  }) {
     this.$el = $el;
     this.$svg = this.$el.querySelector('svg');
-    this.$status = this.$el.querySelector('#status');
-    this.$winner = this.$el.querySelector('#winner');
+    this.$status = this.$el.querySelector('#game-status');
+    this.$winner = this.$el.querySelector('#game-winner');
     
     this.width = width;
     this.height = height;
     this.players = players;
-    this.player = -1;
+    this.player = 0;
+    this.winner = null;
+    this.onTurn = onTurn;
     
     this.lines = {
       // Horizontal
@@ -209,28 +201,32 @@ class Game {
     // Create Boxes & Lines
     for( let x = 0; x < this.width; x++ ) {
       for( let y = 0; y < this.height; y++ ) {
-        this.lines['h'][y] = this.lines['h'][y] || [];
-        const lineTop = this.lines['h'][y][x] = this.lines['h'][y][x] || new LineHorizontal(this, {
+        this.lines['h'][x] = this.lines['h'][x] || [];
+        const lineTop = this.lines['h'][x][y] = this.lines['h'][x][y] || new LineHorizontal(this, {
           x,
           y,
+          onClick: () => this.onTurn({ direction: 'h', x, y }),
         });
         
-        this.lines['h'][y + 1] = this.lines['h'][y + 1] || [];
-        const lineBottom = this.lines['h'][y + 1][x] = this.lines['h'][y + 1][x] || new LineHorizontal(this, {
+        this.lines['h'][x] = this.lines['h'][x] || [];
+        const lineBottom = this.lines['h'][x][y + 1] = this.lines['h'][x][y + 1] || new LineHorizontal(this, {
           x,
           y: y + 1,
+          onClick: () => this.onTurn({ direction: 'h', x, y: y + 1 }),
         });
         
         this.lines['v'][x] = this.lines['v'][x] || [];
         const lineLeft = this.lines['v'][x][y] = this.lines['v'][x][y] || new LineVertical(this, {
           x,
           y,
+          onClick: () => this.onTurn({ direction: 'v', x, y }),
         });
         
         this.lines['v'][x + 1] = this.lines['v'][x + 1] || [];
         const lineRight = this.lines['v'][x + 1][y] = this.lines['v'][x + 1][y] || new LineVertical(this, {
           x: x + 1,
           y,
+          onClick: () => this.onTurn({ direction: 'v', x: x + 1, y }),
         });
         
         this.boxes[y] = this.boxes[y] || [];
@@ -247,11 +243,9 @@ class Game {
     
     // Set Viewbox
     this.$svg.setAttribute('viewBox', `0 0 ${width * BOX_SIZE + GAME_PADDING + GAME_PADDING} ${height * BOX_SIZE + GAME_PADDING + GAME_PADDING}`);
-    
-    this.nextTurn();
   }
   
-  nextTurn() {
+  nextTurn({ nextPlayer = true } = {}) {
     let allBoxesTaken = true;
     this.boxes.forEach(row => {
       row.forEach(box => {
@@ -261,11 +255,20 @@ class Game {
       });
     });
     
+    const scores = {};
+    this.boxes.forEach(row => {
+      row.forEach(box => {
+        if( !box.player ) return;
+        scores[box.player] = scores[box.player] || 0;
+        scores[box.player]++;
+      });
+    });
+    console.log(scores)
+    
     if( allBoxesTaken ) {
-      const players = this.players.sort((a, b) => b.score - a.score);
       if( players[0].score > players[1].score ) {
-        this.setStatus(`${players[0].name} has won!`);
-        this.setStatusColor(players[0].color);   
+        this.winner = players[0];
+        this.renderStatus();
     
         confetti.speed = 10;
         confetti.start();
@@ -274,27 +277,173 @@ class Game {
         setTimeout(() => this.$winner.classList.remove('visible'), 2000);
         setTimeout(() => confetti.stop(), 2000);
       } else {
-        this.setStatus(`It's a tie!`);        
+        this.tie = true;
+        this.renderStatus();
       }
     } else {
-      this.player = (this.player === this.players.length - 1)
-        ? 0
-        : this.player + 1;
-      this.setStatus(`It's your turn, ${this.players[this.player].name}!`); 
-      this.setStatusColor(this.players[this.player].color);     
+      if( nextPlayer ) {
+        this.player = (this.player === this.players.length - 1)
+          ? 0
+          : this.player + 1;
+      }
+        
+      this.renderStatus();
     }
   }
   
-  setStatus(status) {
-    this.$status.textContent = status;    
+  renderStatus() {
+    const player = this.players[this.player];
+    
+    if( this.winner ) {
+      this.setStatus(`<span style="color: ${this.winner.color};">${this.winner.name}</span> has won!`);
+    } else if( this.tie ) {
+      this.setStatus(`It's a tie!`);      
+    } else if( this.playerId === this.player ) {
+      this.setStatus(`It's your turn, <span style="color: ${player.color};">${player.name}</span>!`); 
+    } else {
+      this.setStatus(`It's <span style="color: ${player.color};">${player.name}'s</span> turn!`);         
+    }
+    
+    this.$el.classList.toggle('enabled', this.playerId === this.player);
   }
   
-  setStatusColor(color = 'blue') {
-//    this.$status.style.color = color;
+  setStatus(status) {
+    this.$status.innerHTML = status;    
+  }
+  
+  setState({ player, players, turns }) {
+    this.players = players;
+    
+    turns.forEach(({ direction, x, y, playerId }) => {
+      const line = this.lines[direction][x][y];
+      line.setPlayer(playerId);
+    });
+        
+    this.renderStatus();
+  }
+  
+  setPlayerId(playerId) {
+    this.playerId = playerId;
+  }
+  
+}
+
+class Lobby {
+  
+  constructor($el, {
+    onStart,
+  }) {
+    this.$el = $el;
+    this.$subtitle = this.$el.querySelector('.subtitle');
+    this.$players = this.$el.querySelector('#lobby-players');
+    this.$start = this.$el.querySelector('#lobby-start');
+    this.$start.addEventListener('click', e => {
+      if( this.$start.classList.contains('disabled') ) return;
+      onStart();
+    });
+  }
+  
+  setState({ players }) {
+    this.$players.innerHTML = '';
+    players.forEach((player, i) => {
+      const $player = document.createElement('li');
+      $player.textContent = player.name;
+      $player.style.color = player.color;
+      $player.classList.toggle('you', this.playerId === i);
+      this.$players.appendChild($player);
+    });
+    
+    this.$start.classList.toggle('disabled', players.length < 2);
+  }
+  
+  setSessionId(sessionId) {
+    this.$subtitle.textContent = `Invite your friends! http://foo.bar/${sessionId}`;
+  }
+  
+  setPlayerId(playerId) {
+    this.playerId = playerId;
   }
   
 }
 
 window.addEventListener('load', () => {
-  const game = new Game(document.getElementById('game'), {});
+  const socket = io();
+  const game = new Game(document.getElementById('game'), {
+    onTurn: (...props) => {
+      socket.emit('turn', ...props, err => {
+        if( err ) return alert(err);        
+      });
+    }
+  });
+  const lobby = new Lobby(document.getElementById('lobby'), {
+    onStart: () => {
+      socket.emit('start', err => {
+        if( err ) return alert(err);
+      });
+    },
+  });
+  
+  socket.on('state', state => {
+    lobby.setState(state);
+    game.setState(state);
+    
+    document.querySelector('#lobby').classList.toggle('visible', !state.started);
+    document.querySelector('#game').classList.toggle('visible', state.started);
+  });
+  
+  let sessionId = window.location.pathname;
+  if( sessionId.startsWith('/') ) sessionId = sessionId.substr(1);
+  if( sessionId.length === 5 ) {
+    socket.emit('joinSession', { sessionId }, (err, result) => {
+      if( err ) {
+        if( err === 'session_not_found' ) {
+          alert('This game doesn\'t exist anymore!');
+          return window.location.href = '/';
+        }
+        
+        if( err === 'game_already_started' ) {
+          alert('This game has already started!');
+          return window.location.href = '/';
+        }
+          
+        if( err === 'max_players' ) {
+          alert('Maximum number of players reached!');
+          return window.location.href = '/';  
+        }
+          
+        return alert(err);
+      }
+      
+      const { sessionId, playerId, state } = result;
+      
+      lobby.setSessionId(sessionId);
+      lobby.setPlayerId(playerId);
+      lobby.setState(state);
+      game.setPlayerId(playerId);
+      game.setState(state);
+    });
+  } else {
+    socket.emit('createSession', (err, result) => {
+      if( err ) return alert(err);
+      
+      const { sessionId, playerId, state } = result;
+      
+      history.pushState({ sessionId }, undefined, `/${sessionId}`);
+      
+      lobby.setSessionId(sessionId);
+      lobby.setPlayerId(playerId);
+      lobby.setState(state);
+      game.setPlayerId(playerId);
+      game.setState(state);
+    });
+  }
 });
+
+
+
+
+
+
+
+
+
